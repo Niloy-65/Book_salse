@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Book Sell Form - Ready</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;max-width:1000px;margin:20px auto;padding:10px}
+  h2{margin-bottom:6px}
+  label{display:block;margin-top:10px}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{border:1px solid #ddd;padding:8px;text-align:left}
+  #booksContainer{margin-top:10px}
+  #result{margin-top:12px;color:green}
+  button{padding:8px 12px;margin-top:10px}
+  .small{font-size:0.9em;color:#555}
+</style>
+</head>
+<body>
+<h2>Book Sell Form</h2>
+
+<label>Class/Year:
+  <select id="yearSelect"><option value="">-- select class/year --</option></select>
+</label>
+
+<div id="booksContainer">Select class to load books</div>
+
+<label>Customer (optional):
+  <input id="customer" type="text" placeholder="Customer name">
+</label>
+
+<p>Total: <strong><span id="total">0</span> ৳</strong></p>
+
+<button id="sellBtn">Sell & Save (generate PDF)</button>
+<span class="small"> &nbsp; (Saves to Google Sheet & creates PDF memo)</span>
+
+<div id="result"></div>
+
+<script>
+/* ====== IMPORTANT: PASTE YOUR JSON HERE ======
+   Open the file booksByYear_export.json (or booksByYear_for_frontend.js)
+   and paste the object literal (the whole {...} part) below so it becomes:
+
+   const booksByYear = {
+     "Nursery": [ { "subject":"...", "book":"...", "price": 120 }, ... ],
+     "Year 1": [ ... ],
+     ...
+   };
+
+   DO NOT declare booksByYear twice; paste only once in the spot below.
+*/
+const booksByYear = {
+
+  "Play": [
+  { "subject": "Bangla", "book": "Shobder Khela", "price": 100 },
+  { "subject": "Math", "book": "Number Fun", "price": 80 },
+  { "subject": "Drawing", "book": "Chhobi Amar Bondhu", "price": 60 }
+],
+"Nursery": [
+  { "subject": "Bangla", "book": "Amar Bangla", "price": 120 },
+  { "subject": "English", "book": "My First English Book", "price": 100 },
+  { "subject": "Math", "book": "Shishu Gonit", "price": 90 },
+  { "subject": "Drawing", "book": "Drawing Joy", "price": 70 }
+],
+
+  /* PASTE JSON CONTENT HERE */
+};
+
+/* ====== Put your Apps Script Web App URL here (the one you got after Deploy) ====== */
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxWSNu8X8Frc2hykKoLapL3WeXe6H5eXW3BBEfdqKCIKKsOsf3vMfSsRKtarLOfCM1QCw/exec";
+
+/* ---------- UI Logic ---------- */
+const yearSelect = document.getElementById('yearSelect');
+const booksContainer = document.getElementById('booksContainer');
+const totalEl = document.getElementById('total');
+const sellBtn = document.getElementById('sellBtn');
+const result = document.getElementById('result');
+const customerInput = document.getElementById('customer');
+
+let currentItems = [];
+
+function populateYears(){
+  yearSelect.innerHTML = '<option value="">-- select class/year --</option>';
+  Object.keys(booksByYear).forEach(y=>{
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = y;
+    yearSelect.appendChild(opt);
+  });
+}
+
+function renderBooksForYear(y){
+  currentItems = [];
+  if(!y || !booksByYear[y]){ booksContainer.innerHTML = '<i>No books for this class</i>'; return; }
+  const list = booksByYear[y];
+  let html = '<table><thead><tr><th>Subject</th><th>Book</th><th style="width:120px">Price (৳)</th><th style="width:90px">Qty</th></tr></thead><tbody>';
+  list.forEach((b, idx)=>{
+    // ensure safe display
+    const subj = b.subject || '';
+    const title = b.book || b.title || '';
+    const priceStr = (b.price !== null && b.price !== undefined) ? String(b.price) : '';
+    html += '<tr>' +
+      '<td>' + escapeHtml(subj) + '</td>' +
+      '<td>' + escapeHtml(title) + '</td>' +
+      '<td>' + escapeHtml(priceStr) + '</td>' +
+      "<td><input type='number' min='0' value='0' data-idx='" + idx + "' style='width:70px'></td>" +
+      '</tr>';
+  });
+  html += '</tbody></table>';
+  booksContainer.innerHTML = html;
+
+  booksContainer.querySelectorAll('input[type=number]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const idx = parseInt(inp.dataset.idx);
+      const qty = parseInt(inp.value) || 0;
+      currentItems = currentItems.filter(i=>i.idx !== idx);
+      if(qty > 0){
+        const b = list[idx];
+        const price = Number(b.price) || 0;
+        currentItems.push({
+          idx: idx,
+          subject: b.subject || '',
+          book: b.book || '',
+          title: b.book || '',
+          price: price,
+          qty: qty,
+          subtotal: price * qty
+        });
+      }
+      recalc();
+    });
+  });
+}
+
+function recalc(){
+  const total = currentItems.reduce((s,i)=>s + (i.subtotal || 0), 0);
+  // show without too many decimals
+  totalEl.textContent = (Math.round(total*100)/100).toString();
+}
+
+yearSelect.addEventListener('change', ()=> renderBooksForYear(yearSelect.value));
+
+sellBtn.addEventListener('click', ()=>{
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "APPS_SCRIPT_URL_HERE") { alert('Set APPS_SCRIPT_URL in the HTML.'); return; }
+  if (!yearSelect.value) { alert('Select class/year'); return; }
+  if (currentItems.length === 0) { alert('Select at least one book (qty > 0)'); return; }
+
+  const payload = {
+    year: yearSelect.value,
+    items: currentItems.map(i=>({
+      subject: i.subject, book: i.book, title: i.title, price: i.price, qty: i.qty, subtotal: i.subtotal
+    })),
+    total: currentItems.reduce((s,i)=>s + (i.subtotal || 0), 0),
+    customer: customerInput.value || ''
+  };
+
+  result.style.color = 'black';
+  result.textContent = 'Sending...';
+
+  fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(res => {
+    // some errors might not return JSON - handle safely
+    return res.json().catch(()=>({status:'error', message:'Invalid JSON response from server'}));
+  })
+  .then(data => {
+    if (data.status === 'ok') {
+      result.style.color = 'green';
+      result.innerHTML = 'Saved. PDF: <a href="'+escapeHtml(data.url)+'" target="_blank">Open Memo</a>';
+    } else {
+      result.style.color = 'red';
+      result.textContent = 'Error: ' + (data.message || JSON.stringify(data));
+    }
+  })
+  .catch(err => {
+    result.style.color = 'red';
+    result.textContent = 'Request failed: ' + err;
+  });
+});
+
+/* Utility: basic HTML-escape to avoid injected markup (safe display) */
+function escapeHtml(str){
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'",'&#39;');
+}
+
+/* initialize */
+populateYears();
+</script>
+</body>
+</html>
