@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Book Sell Form (Live)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen p-4">
+  <div class="max-w-4xl mx-auto bg-white p-6 rounded shadow">
+    <h1 class="text-2xl font-bold mb-4">Book Sell (Live from Google Sheets)</h1>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+      <select id="classSelect" class="border p-2 rounded">
+        <option value="">-- Select Class/Year --</option>
+      </select>
+
+      <input id="searchInput" type="text" placeholder="Search book/subject..." class="border p-2 rounded" />
+
+      <div class="flex gap-2">
+        <button id="reloadBtn" class="bg-blue-600 text-white px-4 py-2 rounded">Reload</button>
+        <button id="viewCartBtn" class="bg-green-600 text-white px-4 py-2 rounded">View Cart</button>
+      </div>
+    </div>
+
+    <div id="booksArea" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div class="col-span-full text-gray-500">Loading books...</div>
+    </div>
+
+    <div id="cartModal" class="fixed inset-0 hidden items-center justify-center bg-black/40 p-4">
+      <div class="bg-white p-4 rounded w-full max-w-2xl">
+        <h2 class="text-lg font-semibold">Cart</h2>
+        <div id="cartItems" class="mt-3"></div>
+        <div class="mt-4 flex justify-between items-center">
+          <div>Total: <span id="cartTotal">0</span> ৳</div>
+          <div>
+            <input id="customer" placeholder="Customer name (optional)" class="border p-1 rounded mr-2">
+            <button id="confirmSell" class="bg-blue-600 text-white px-3 py-1 rounded">Sell & Save</button>
+            <button id="closeCart" class="bg-gray-300 px-3 py-1 rounded">Close</button>
+          </div>
+        </div>
+        <div id="sellResult" class="mt-2 text-sm"></div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+// ----- CONFIG: replace these -----
+const SPREADSHEET_ID = 'PUT_YOUR_SPREADSHEET_ID_HERE';
+const SHEETS = [
+  { name: "Nursery", gid: "895163057" },
+  { name: "Reception", gid: "1160595593" },
+  { name: "Year 1", gid: "1345706755" },
+  { name: "Year 2", gid: "1936279195" },
+  { name: "Year 3", gid: "316633986" },
+  { name: "Year 4", gid: "1739534263" },
+  { name: "Year 5", gid: "17621944" },
+  { name: "Year 6", gid: "1465173656" },
+  { name: "Year 7", gid: "1305449456" },
+  { name: "Year 8", gid: "230300680" },
+  { name: "Year 9", gid: "1869557983" },
+  { name: "Question Paper", gid: "1475934526" }
+];
+// your apps script URL (doPost) after deployment:
+const APPS_SCRIPT_URL = "PUT_YOUR_APPS_SCRIPT_URL_HERE";
+// ----------------------------------
+
+const BASE_CSV = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=csv&gid=`;
+
+const classSelect = document.getElementById('classSelect');
+const searchInput = document.getElementById('searchInput');
+const reloadBtn = document.getElementById('reloadBtn');
+const booksArea = document.getElementById('booksArea');
+const viewCartBtn = document.getElementById('viewCartBtn');
+const cartModal = document.getElementById('cartModal');
+const cartItemsEl = document.getElementById('cartItems');
+const cartTotalEl = document.getElementById('cartTotal');
+const closeCart = document.getElementById('closeCart');
+const confirmSell = document.getElementById('confirmSell');
+const customerInput = document.getElementById('customer');
+const sellResult = document.getElementById('sellResult');
+
+let allRows = [];
+let filteredRows = [];
+let cart = [];
+
+// build class select
+classSelect.innerHTML = '<option value="">-- Select Class/Year --</option>' + SHEETS.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+
+// fetch CSVs
+async function fetchAll() {
+  booksArea.innerHTML = '<div class="col-span-full text-gray-400">Loading...</div>';
+  try {
+    const csvs = await Promise.all(SHEETS.map(s => fetch(BASE_CSV + s.gid).then(r => r.text())));
+    allRows = [];
+    csvs.forEach((txt,i) => {
+      const parsed = Papa.parse(txt, { header: true, skipEmptyLines: true });
+      parsed.data.forEach(row => {
+        row._sheet = SHEETS[i].name;
+        allRows.push(normalizeRow(row));
+      });
+    });
+    applyFilter();
+  } catch (err) {
+    booksArea.innerHTML = '<div class="col-span-full text-red-500">Failed to load data. Check SPREADSHEET_ID and GIDs or network.</div>';
+    console.error(err);
+  }
+}
+
+function normalizeRow(r){
+  return {
+    Subject: r["Subject"] || r["subject"] || '',
+    Book: r["Book Name"] || r["Book"] || r["book"] || r["Books"] || '',
+    Price: parseFloat((r["Price"]||r["price"]||'').toString().replace(/[^\d\.\-]/g,'')) || 0,
+    Quantity: r["Quantity"] || r["Quentity"] || r["Total Book"] || '',
+    Note: r["Note"] || '',
+    _sheet: r._sheet
+  };
+}
+
+function applyFilter(){
+  const sel = classSelect.value;
+  const q = searchInput.value.trim().toLowerCase();
+  filteredRows = allRows.filter(r => {
+    if (sel && r._sheet !== sel) return false;
+    if (!q) return true;
+    return (r.Book + ' ' + r.Subject + ' ' + r.Note).toLowerCase().includes(q);
+  });
+  renderBooks();
+}
+
+function renderBooks(){
+  booksArea.innerHTML = '';
+  if (!filteredRows.length) {
+    booksArea.innerHTML = '<div class="col-span-full text-gray-400">No books found</div>';
+    return;
+  }
+  filteredRows.forEach((r, idx) => {
+    const html = `
+      <div class="bg-white rounded p-3 shadow">
+        <h3 class="font-semibold">${escapeHtml(r.Book)}</h3>
+        <div class="text-sm text-gray-600">${escapeHtml(r.Subject)} • <b>${escapeHtml(r._sheet)}</b></div>
+        <div class="mt-2 flex justify-between items-center">
+          <div class="text-lg font-semibold">${r.Price} ৳</div>
+          <div>
+            <input data-idx="${idx}" class="w-20 border p-1 rounded mr-2" type="number" min="0" value="0">
+            <button data-idx="${idx}" class="addBtn bg-blue-600 text-white px-3 py-1 rounded">Add</button>
+          </div>
+        </div>
+        ${r.Note ? `<div class="text-xs text-gray-500 mt-2">Note: ${escapeHtml(r.Note)}</div>` : ''}
+      </div>`;
+    booksArea.insertAdjacentHTML('beforeend', html);
+  });
+
+  // bind add buttons
+  document.querySelectorAll('.addBtn').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      const idx = Number(btn.getAttribute('data-idx'));
+      const input = document.querySelector(`input[data-idx="${idx}"]`);
+      const qty = Number(input.value) || 0;
+      if (qty <= 0) { alert('Enter qty > 0'); return; }
+      const item = filteredRows[idx];
+      addToCart({ subject: item.Subject, book: item.Book, price: item.Price, qty: qty });
+      input.value = 0;
+    });
+  });
+}
+
+function addToCart(item){
+  // if same book exists, increase qty
+  const found = cart.find(c => c.book === item.book && c.subject === item.subject);
+  if (found) {
+    found.qty += item.qty;
+    found.subtotal = found.qty * found.price;
+  } else {
+    item.subtotal = item.qty * item.price;
+    cart.push(item);
+  }
+  alert('Added to cart');
+}
+
+viewCartBtn.addEventListener('click', () => {
+  renderCart();
+  cartModal.classList.remove('hidden');
+  cartModal.style.display = 'flex';
+});
+
+closeCart.addEventListener('click', () => {
+  cartModal.classList.add('hidden');
+  cartModal.style.display = 'none';
+});
+
+function renderCart(){
+  cartItemsEl.innerHTML = '';
+  if (!cart.length) { cartItemsEl.innerHTML = '<div class="text-gray-500">Cart empty</div>'; cartTotalEl.textContent = '0'; return; }
+  let html = '<ul class="space-y-2">';
+  let total = 0;
+  cart.forEach((c, i) => {
+    total += c.subtotal;
+    html += `<li class="flex justify-between items-center">
+      <div><b>${escapeHtml(c.book)}</b><div class="text-xs text-gray-600">${escapeHtml(c.subject)}</div></div>
+      <div class="text-sm">${c.qty} × ${c.price} = <b>${c.subtotal}</b></div>
+      <div class="ml-3"><button data-i="${i}" class="removeBtn text-red-600">Remove</button></div>
+    </li>`;
+  });
+  html += '</ul>';
+  cartItemsEl.innerHTML = html;
+  cartTotalEl.textContent = total;
+  // bind remove
+  document.querySelectorAll('.removeBtn').forEach(b => b.addEventListener('click', ev => {
+    const i = Number(b.getAttribute('data-i'));
+    cart.splice(i,1);
+    renderCart();
+  }));
+}
+
+// confirm sell (POST to Apps Script)
+confirmSell.addEventListener('click', async () => {
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PUT_YOUR') === 0) { alert('Set your APPS_SCRIPT_URL in the code'); return; }
+  if (!cart.length) { alert('Cart empty'); return; }
+  const payload = {
+    year: classSelect.value || 'Unknown',
+    items: cart.map(c => ({subject:c.subject, book:c.book, price:c.price, qty:c.qty, subtotal:c.subtotal})),
+    total: Number(cartTotalEl.textContent) || 0,
+    customer: customerInput.value || ''
+  };
+  sellResult.textContent = 'Sending...';
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      sellResult.innerHTML = 'Saved. PDF: <a href="'+data.url+'" target="_blank">Open Memo</a>';
+      // clear cart
+      cart = [];
+      renderCart();
+    } else {
+      sellResult.textContent = 'Save failed: ' + (data.message || JSON.stringify(data));
+    }
+  } catch (err) {
+    sellResult.textContent = 'Request failed: ' + err;
+  }
+});
+
+// helpers
+function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
+
+searchInput.addEventListener('input', applyFilter);
+classSelect.addEventListener('change', applyFilter);
+reloadBtn.addEventListener('click', fetchAll);
+
+// initial load
+fetchAll();
+</script>
+</body>
+</html>
